@@ -1,5 +1,8 @@
 FROM node:18-alpine
 
+# Install wget for health checks
+RUN apk add --no-cache wget
+
 # Set working directory
 WORKDIR /app
 
@@ -20,8 +23,11 @@ RUN adduser -S mcp -u 1001
 RUN chown -R mcp:nodejs /app
 USER mcp
 
+# Set container mode environment variable
+ENV CONTAINER_MODE=true
+
 # Expose port (if needed for health checks)
-EXPOSE 3000
+EXPOSE 5000
 
 # Start the application
 CMD ["node", "mysql-mcp-server.js"]

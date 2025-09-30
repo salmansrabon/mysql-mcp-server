@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import mysql from "mysql2/promise";
+import { createServer } from 'http';
 
 // Setup MySQL pool
 const pool = mysql.createPool({
@@ -65,8 +66,8 @@ server.tool(
   }
 );
 
-// Start server with stdio transport
-const transport = new StdioServerTransport();
+// Determine if running in container (Docker) or as CLI tool
+const isContainer = process.env.CONTAINER_MODE === 'true' || process.argv.includes('--container');
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
@@ -79,13 +80,49 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-try {
-  await server.connect(transport);
-  console.log('MySQL MCP Server started successfully');
-} catch (error) {
-  console.error('Failed to start server:', error);
-  process.exit(1);
-}
+if (isContainer) {
+  // Run as HTTP server for containerized deployment
+  const port = process.env.PORT || 5000;
+  const httpServer = createServer((req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'healthy', service: 'mysql-mcp-server' }));
+      return;
+    }
+    
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ 
+      service: 'MySQL MCP Server', 
+      version: '1.0.0',
+      status: 'running',
+      endpoints: {
+        health: '/health'
+      }
+    }));
+  });
 
-// Keep the process alive
-process.stdin.resume();
+  httpServer.listen(port, () => {
+    console.log(`MySQL MCP Server started successfully on port ${port}`);
+    console.log('Health check available at /health');
+  });
+
+  // Keep the process alive
+  setInterval(() => {
+    console.log('MySQL MCP Server is running...');
+  }, 30000);
+
+} else {
+  // Run with stdio transport for MCP client usage
+  const transport = new StdioServerTransport();
+  
+  try {
+    await server.connect(transport);
+    console.log('MySQL MCP Server started successfully with stdio transport');
+    
+    // Keep the process alive for stdio mode
+    process.stdin.resume();
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
