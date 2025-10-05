@@ -5,13 +5,23 @@ import { z } from "zod";
 import mysql from "mysql2/promise";
 import { createServer } from 'http';
 
-// Setup MySQL pool
-const pool = mysql.createPool({
+// Setup MySQL base config
+const baseConfig = {
   host: process.env.MYSQL_HOST || "localhost",
   user: process.env.MYSQL_USER || "root",
   password: process.env.MYSQL_PASSWORD || "123",
-  database: process.env.MYSQL_DATABASE || "sharebox_db",
-});
+};
+
+// Map to store pools for different databases
+const pools = new Map();
+
+// Function to get or create a pool for a specific database
+function getPool(database) {
+  if (!pools.has(database)) {
+    pools.set(database, mysql.createPool({ ...baseConfig, database }));
+  }
+  return pools.get(database);
+}
 
 // Create MCP server
 const server = new McpServer({
@@ -23,6 +33,25 @@ const server = new McpServer({
   },
 });
 
+// Tool: List all databases
+server.tool(
+  "listDatabases",
+  {
+    description: "List all available databases on the MySQL server",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    // Use a temporary connection without specifying database
+    const tempPool = mysql.createPool(baseConfig);
+    try {
+      const [rows] = await tempPool.query("SHOW DATABASES");
+      return { content: [{ type: "json", data: rows }] };
+    } finally {
+      await tempPool.end();
+    }
+  }
+);
+
 // Tool: Run a SQL query
 server.tool(
   "query",
@@ -30,9 +59,11 @@ server.tool(
     description: "Run a SQL query on the MySQL database",
     inputSchema: z.object({
       sql: z.string().describe("SQL query to execute"),
+      database: z.string().describe("The database name to run the query on"),
     }),
   },
-  async ({ sql }) => {
+  async ({ sql, database }) => {
+    const pool = getPool(database);
     const [rows] = await pool.query(sql);
     return { content: [{ type: "json", data: rows }] };
   }
@@ -43,9 +74,12 @@ server.tool(
   "listTables",
   {
     description: "List all tables in the database",
-    inputSchema: z.object({}),
+    inputSchema: z.object({
+      database: z.string().describe("The database name to list tables from"),
+    }),
   },
-  async () => {
+  async ({ database }) => {
+    const pool = getPool(database);
     const [rows] = await pool.query("SHOW TABLES");
     return { content: [{ type: "json", data: rows }] };
   }
@@ -58,9 +92,11 @@ server.tool(
     description: "Describe a table structure (columns, types, etc.)",
     inputSchema: z.object({
       table: z.string().describe("The table name to describe"),
+      database: z.string().describe("The database name where the table is located"),
     }),
   },
-  async ({ table }) => {
+  async ({ table, database }) => {
+    const pool = getPool(database);
     const [rows] = await pool.query(`DESCRIBE \`${table}\``);
     return { content: [{ type: "json", data: rows }] };
   }
