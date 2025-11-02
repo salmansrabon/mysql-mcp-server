@@ -3,32 +3,21 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import mysql from "mysql2/promise";
-import { createServer } from 'http';
 
 // Setup MySQL base config
 const baseConfig = {
   host: process.env.MYSQL_HOST || "localhost",
   user: process.env.MYSQL_USER || "root",
-  password: process.env.MYSQL_PASSWORD || "123",
+  password: process.env.MYSQL_PASSWORD || "1234",
 };
 
-// Map to store pools for different databases
-const pools = new Map();
-
-// Function to get or create a pool for a specific database
-function getPool(database) {
-  if (!pools.has(database)) {
-    pools.set(database, mysql.createPool({ ...baseConfig, database }));
-  }
-  return pools.get(database);
-}
 
 // Create MCP server
 const server = new McpServer({
   name: "mysql-mcp",
   version: "0.1.0",
   capabilities: {
-    tools: {}, // tools will be registered below
+    tools: {},
     resources: {},
   },
 });
@@ -36,16 +25,53 @@ const server = new McpServer({
 // Tool: List all databases
 server.tool(
   "listDatabases",
-  {
-    description: "List all available databases on the MySQL server",
-    inputSchema: z.object({}),
-  },
+  "List all available databases on the MySQL server",
+  z.object({}),
   async () => {
-    // Use a temporary connection without specifying database
     const tempPool = mysql.createPool(baseConfig);
     try {
       const [rows] = await tempPool.query("SHOW DATABASES");
-      return { content: [{ type: "json", data: rows }] };
+      return { 
+        content: [{ 
+          type: "text", 
+          text: JSON.stringify(rows, null, 2) 
+        }] 
+      };
+    } catch (error) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: `Error: ${error.message}` 
+        }] 
+      };
+    } finally {
+      await tempPool.end();
+    }
+  }
+);
+
+// Tool: Get top 5 users from dmoneydb
+server.tool(
+  "getTop5Users",
+  "Get top 5 users from dmoneydb.users table",
+  z.object({}),
+  async () => {
+    const tempPool = mysql.createPool({ ...baseConfig, database: "dmoneydb" });
+    try {
+      const [rows] = await tempPool.query("SELECT * FROM users LIMIT 5");
+      return { 
+        content: [{ 
+          type: "text", 
+          text: JSON.stringify(rows, null, 2) 
+        }] 
+      };
+    } catch (error) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: `Error: ${error.message}` 
+        }] 
+      };
     } finally {
       await tempPool.end();
     }
@@ -55,55 +81,144 @@ server.tool(
 // Tool: Run a SQL query
 server.tool(
   "query",
-  {
-    description: "Run a SQL query on the MySQL database",
-    inputSchema: z.object({
-      sql: z.string().describe("SQL query to execute"),
-      database: z.string().describe("The database name to run the query on"),
-    }),
-  },
-  async ({ sql, database }) => {
-    const pool = getPool(database);
-    const [rows] = await pool.query(sql);
-    return { content: [{ type: "json", data: rows }] };
+  "Run a SQL query on the MySQL database",
+  z.object({
+    sql: z.string().describe("SQL query to execute"),
+    database: z.string().describe("The database name to run the query on")
+  }),
+  async (params) => {
+    console.error('Query params received:', JSON.stringify(params));
+    
+    const sql = params?.sql || params?.query;
+    const database = params?.database || params?.db;
+    
+    if (!sql) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: `Error: SQL query is required. Received params: ${JSON.stringify(params)}` 
+        }] 
+      };
+    }
+    
+    if (!database) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: `Error: Database name is required. Received params: ${JSON.stringify(params)}` 
+        }] 
+      };
+    }
+
+    const tempPool = mysql.createPool({ ...baseConfig, database });
+    try {
+      const [rows] = await tempPool.query(sql);
+      return { 
+        content: [{ 
+          type: "text", 
+          text: JSON.stringify(rows, null, 2) 
+        }] 
+      };
+    } catch (error) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: `Error: ${error.message}` 
+        }] 
+      };
+    } finally {
+      await tempPool.end();
+    }
   }
 );
 
 // Tool: List all tables
 server.tool(
   "listTables",
-  {
-    description: "List all tables in the database",
-    inputSchema: z.object({
-      database: z.string().describe("The database name to list tables from"),
-    }),
-  },
+  "List all tables in the database",
+  z.object({
+    database: z.string().describe("The database name to list tables from")
+  }),
   async ({ database }) => {
-    const pool = getPool(database);
-    const [rows] = await pool.query("SHOW TABLES");
-    return { content: [{ type: "json", data: rows }] };
+    if (!database) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: "Error: Database name is required" 
+        }] 
+      };
+    }
+
+    const tempPool = mysql.createPool({ ...baseConfig, database });
+    try {
+      const [rows] = await tempPool.query("SHOW TABLES");
+      return { 
+        content: [{ 
+          type: "text", 
+          text: JSON.stringify(rows, null, 2) 
+        }] 
+      };
+    } catch (error) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: `Error: ${error.message}` 
+        }] 
+      };
+    } finally {
+      await tempPool.end();
+    }
   }
 );
 
 // Tool: Describe a table
 server.tool(
   "describeTable",
-  {
-    description: "Describe a table structure (columns, types, etc.)",
-    inputSchema: z.object({
-      table: z.string().describe("The table name to describe"),
-      database: z.string().describe("The database name where the table is located"),
-    }),
-  },
+  "Describe a table structure (columns, types, etc.)",
+  z.object({
+    table: z.string().describe("The table name to describe"),
+    database: z.string().describe("The database name where the table is located")
+  }),
   async ({ table, database }) => {
-    const pool = getPool(database);
-    const [rows] = await pool.query(`DESCRIBE \`${table}\``);
-    return { content: [{ type: "json", data: rows }] };
+    if (!table) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: "Error: Table name is required" 
+        }] 
+      };
+    }
+    
+    if (!database) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: "Error: Database name is required" 
+        }] 
+      };
+    }
+
+    const tempPool = mysql.createPool({ ...baseConfig, database });
+    try {
+      const [rows] = await tempPool.query(`DESCRIBE \`${table}\``);
+      return { 
+        content: [{ 
+          type: "text", 
+          text: JSON.stringify(rows, null, 2) 
+        }] 
+      };
+    } catch (error) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: `Error: ${error.message}` 
+        }] 
+      };
+    } finally {
+      await tempPool.end();
+    }
   }
 );
-
-// Determine if running in container (Docker) or as CLI tool
-const isContainer = process.env.CONTAINER_MODE === 'true' || process.argv.includes('--container');
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
@@ -116,49 +231,13 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-if (isContainer) {
-  // Run as HTTP server for containerized deployment
-  const port = process.env.PORT || 5000;
-  const httpServer = createServer((req, res) => {
-    if (req.url === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'healthy', service: 'mysql-mcp-server' }));
-      return;
-    }
-    
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      service: 'MySQL MCP Server', 
-      version: '1.0.0',
-      status: 'running',
-      endpoints: {
-        health: '/health'
-      }
-    }));
-  });
+// Run with stdio transport for MCP client usage
+const transport = new StdioServerTransport();
 
-  httpServer.listen(port, () => {
-    console.log(`MySQL MCP Server started successfully on port ${port}`);
-    console.log('Health check available at /health');
-  });
-
-  // Keep the process alive
-  setInterval(() => {
-    console.log('MySQL MCP Server is running...');
-  }, 30000);
-
-} else {
-  // Run with stdio transport for MCP client usage
-  const transport = new StdioServerTransport();
-  
-  try {
-    await server.connect(transport);
-    console.log('MySQL MCP Server started successfully with stdio transport');
-    
-    // Keep the process alive for stdio mode
-    process.stdin.resume();
-  } catch (error) {
-    console.error('Failed to start server:', error);
-    process.exit(1);
-  }
+try {
+  await server.connect(transport);
+  console.error('MySQL MCP Server started successfully with stdio transport');
+} catch (error) {
+  console.error('Failed to start server:', error);
+  process.exit(1);
 }
